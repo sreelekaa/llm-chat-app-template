@@ -13,15 +13,16 @@ export default {
 
     // CORS
     if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type"
-        }
-      });
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type"
     }
+  });
+}
+    
 
     // Homepage
     if (url.pathname === "/") {
@@ -569,12 +570,16 @@ async function processRecording() {
                 }
             );
 
-        if (!response.ok) {
+if (!response.ok) {
 
-            throw new Error(
-                await response.text()
-            );
-        }
+    const errorText = await response.text();
+
+    console.error("API ERROR:", errorText);
+
+    throw new Error(
+        `API ${response.status}: ${errorText}`
+    );
+}
 
         const userHeader =
             response.headers.get(
@@ -629,13 +634,13 @@ async function processRecording() {
 
     }
 
-    catch (error) {
+catch (error) {
 
-        console.error(error);
+    console.error("VOICE ERROR:", error);
 
-        status.textContent =
-            "Something went wrong. Please try again.";
-    }
+    status.textContent =
+        "Error: " + error.message;
+}
 
 }
 
