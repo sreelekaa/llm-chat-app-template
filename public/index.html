@@ -1,183 +1,719 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-	<head>
-		<meta charset="UTF-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<title>LLM Chat App</title>
-		<style>
-			:root {
-				--primary-color: #f6821f;
-				--primary-hover: #e67e22;
-				--light-bg: #f9fafb;
-				--border-color: #e5e7eb;
-				--text-color: #1f2937;
-				--text-light: #6b7280;
-				--user-msg-bg: #fff2e6;
-				--assistant-msg-bg: #f3f4f6;
-			}
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-			* {
-				box-sizing: border-box;
-				margin: 0;
-				padding: 0;
-			}
+    <title>Speedbot AI Voice Demo</title>
 
-			body {
-				font-family:
-					-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu,
-					Cantarell, sans-serif;
-				line-height: 1.6;
-				color: var(--text-color);
-				max-width: 800px;
-				margin: 0 auto;
-				padding: 1rem;
-			}
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
 
-			header {
-				text-align: center;
-				margin-bottom: 2rem;
-				padding: 1rem 0;
-				border-bottom: 1px solid var(--border-color);
-			}
+        body {
+            min-height: 100vh;
+            font-family: Arial, Helvetica, sans-serif;
+            background: #f5f7fb;
+            color: #1f2937;
+            display: flex;
+            flex-direction: column;
+        }
 
-			h1 {
-				font-size: 1.5rem;
-				color: var(--primary-color);
-			}
+        header {
+            text-align: center;
+            padding: 55px 20px 30px;
+        }
 
-			.chat-container {
-				display: flex;
-				flex-direction: column;
-				height: calc(100vh - 200px);
-				min-height: 400px;
-				border: 1px solid var(--border-color);
-				border-radius: 8px;
-				overflow: hidden;
-			}
+        .badge {
+            display: inline-block;
+            padding: 7px 14px;
+            border-radius: 20px;
+            background: #e8eefc;
+            color: #3157c8;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            margin-bottom: 18px;
+        }
 
-			.chat-messages {
-				flex: 1;
-				overflow-y: auto;
-				padding: 1rem;
-				background-color: var(--light-bg);
-			}
+        header h1 {
+            font-size: 42px;
+            line-height: 1.15;
+            margin-bottom: 10px;
+        }
 
-			.message {
-				margin-bottom: 1rem;
-				padding: 0.75rem;
-				border-radius: 8px;
-				max-width: 80%;
-			}
+        header p {
+            font-size: 22px;
+            margin-bottom: 8px;
+            color: #4b5563;
+        }
 
-			.message p {
-				white-space: pre-line;
-				margin: 0;
-				overflow-wrap: anywhere;
-			}
+        header span {
+            font-size: 14px;
+            color: #6b7280;
+        }
 
-			.user-message {
-				background-color: var(--user-msg-bg);
-				align-self: flex-end;
-				margin-left: auto;
-			}
+        .voice-container {
+            width: min(700px, 92%);
+            margin: 10px auto 50px;
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 10px 35px rgba(0, 0, 0, 0.08);
+        }
 
-			.assistant-message {
-				background-color: var(--assistant-msg-bg);
-				align-self: flex-start;
-			}
+        .conversation {
+            height: 330px;
+            overflow-y: auto;
+            padding: 10px;
+            margin-bottom: 20px;
+            border: 1px solid #e5e7eb;
+            border-radius: 14px;
+            background: #fafafa;
+        }
 
-			.message-input {
-				display: flex;
-				padding: 0.75rem;
-				border-top: 1px solid var(--border-color);
-				background-color: white;
-			}
+        .message {
+            margin-bottom: 16px;
+            padding: 14px 16px;
+            border-radius: 14px;
+            max-width: 85%;
+            line-height: 1.5;
+        }
 
-			#user-input {
-				flex: 1;
-				padding: 0.75rem;
-				border: 1px solid var(--border-color);
-				border-radius: 4px;
-				font-family: inherit;
-				resize: none;
-				min-height: 44px;
-			}
+        .message.user {
+            margin-left: auto;
+            background: #e8eefc;
+            text-align: right;
+        }
 
-			#send-button {
-				margin-left: 0.5rem;
-				padding: 0 1rem;
-				background-color: var(--primary-color);
-				color: white;
-				border: none;
-				border-radius: 4px;
-				cursor: pointer;
-				transition: background-color 0.2s;
-			}
+        .message.assistant {
+            margin-right: auto;
+            background: #f0f0f0;
+        }
 
-			#send-button:hover {
-				background-color: var(--primary-hover);
-			}
+        .label {
+            font-size: 12px;
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #6b7280;
+        }
 
-			#send-button:disabled {
-				background-color: var(--text-light);
-				cursor: not-allowed;
-			}
+        .status {
+            text-align: center;
+            color: #6b7280;
+            font-size: 14px;
+            min-height: 22px;
+            margin-bottom: 20px;
+        }
 
-			.typing-indicator {
-				display: none;
-				font-style: italic;
-				color: var(--text-light);
-				padding: 1rem;
-			}
+        .mic-button {
+            display: flex;
+            align-items: center;
+            justify-content: center;
 
-			.typing-indicator.visible {
-				display: block;
-			}
+            width: 90px;
+            height: 90px;
 
-			footer {
-				margin-top: 1rem;
-				text-align: center;
-				font-size: 0.85rem;
-				color: var(--text-light);
-			}
-		</style>
-	</head>
-	<body>
-		<header>
-			<h1>Cloudflare AI Chat</h1>
-			<p>Powered by Cloudflare Workers AI</p>
-		</header>
+            margin: 0 auto;
 
-		<div class="chat-container">
-			<div id="chat-messages" class="chat-messages">
-				<div class="message assistant-message">
-					<p>
-						Hello! I'm an LLM chat app powered by Cloudflare Workers AI. How can
-						I help you today?
-					</p>
-				</div>
-			</div>
+            border: none;
+            border-radius: 50%;
 
-			<div class="typing-indicator" id="typing-indicator">
-				AI is thinking...
-			</div>
+            background: #3157c8;
+            color: white;
 
-			<div class="message-input">
-				<textarea
-					id="user-input"
-					placeholder="Type your message here..."
-					rows="1"
-					autofocus
-				></textarea>
-				<button id="send-button">Send</button>
-			</div>
-		</div>
+            font-size: 36px;
+            cursor: pointer;
 
-		<footer>
-			<p>Cloudflare Workers AI Chat Template &copy; 2025</p>
-		</footer>
+            box-shadow: 0 8px 20px rgba(49, 87, 200, 0.25);
 
-		<!-- Chat app script -->
-		<script src="chat.js"></script>
-	</body>
+            transition:
+                transform 0.2s ease,
+                box-shadow 0.2s ease;
+        }
+
+        .mic-button:hover {
+            transform: scale(1.05);
+        }
+
+        .mic-button:active {
+            transform: scale(0.96);
+        }
+
+        .mic-button.recording {
+            background: #dc2626;
+            box-shadow: 0 0 0 12px rgba(220, 38, 38, 0.12);
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.35);
+            }
+
+            70% {
+                box-shadow: 0 0 0 18px rgba(220, 38, 38, 0);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 rgba(220, 38, 38, 0);
+            }
+        }
+
+        .mic-hint {
+            text-align: center;
+            margin-top: 15px;
+            color: #9ca3af;
+            font-size: 13px;
+        }
+
+        .processing {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+
+        @media (max-width: 600px) {
+            header {
+                padding-top: 35px;
+            }
+
+            header h1 {
+                font-size: 32px;
+            }
+
+            header p {
+                font-size: 19px;
+            }
+
+            .voice-container {
+                padding: 20px;
+            }
+
+            .conversation {
+                height: 300px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+<header>
+    <div class="badge">AI VOICE AGENT</div>
+
+    <h1>Speedbot AI Voice Demo</h1>
+
+    <p>Custom Voice Agent</p>
+
+    <span>
+        Whisper • Llama 3.3 • Chatterbox V3
+    </span>
+</header>
+
+
+<div class="voice-container">
+
+    <div id="conversation" class="conversation">
+
+        <div class="message assistant">
+            <div class="label">Speedbot</div>
+
+            <div>
+                Hello! I'm your Speedbot voice assistant.
+                How can I help you?
+            </div>
+        </div>
+
+    </div>
+
+
+    <div id="status" class="status">
+        Click the microphone to start speaking.
+    </div>
+
+
+    <button
+        id="micButton"
+        class="mic-button"
+        type="button"
+        aria-label="Start voice recording"
+    >
+        🎙️
+    </button>
+
+
+    <p class="mic-hint">
+        Click to speak • Click again to stop
+    </p>
+
+</div>
+
+
+<script>
+
+const micButton = document.getElementById("micButton");
+const status = document.getElementById("status");
+const conversation = document.getElementById("conversation");
+
+let mediaRecorder = null;
+let audioChunks = [];
+let isRecording = false;
+let isProcessing = false;
+
+
+/*
+ * Start / stop recording
+ */
+
+micButton.addEventListener("click", async () => {
+
+    if (isProcessing) {
+        return;
+    }
+
+    if (!isRecording) {
+        await startRecording();
+    } else {
+        stopRecording();
+    }
+
+});
+
+
+/*
+ * Start microphone
+ */
+
+async function startRecording() {
+
+    try {
+
+        if (!navigator.mediaDevices ||
+            !navigator.mediaDevices.getUserMedia) {
+
+            throw new Error(
+                "Microphone access is not supported by this browser."
+            );
+        }
+
+
+        const stream =
+            await navigator.mediaDevices.getUserMedia({
+                audio: true
+            });
+
+
+        audioChunks = [];
+
+
+        /*
+         * Browser supported recording format
+         */
+
+        let options = {};
+
+        if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
+
+            options.mimeType =
+                "audio/webm;codecs=opus";
+
+        } else if (MediaRecorder.isTypeSupported("audio/webm")) {
+
+            options.mimeType =
+                "audio/webm";
+        }
+
+
+        mediaRecorder =
+            new MediaRecorder(
+                stream,
+                options
+            );
+
+
+        mediaRecorder.ondataavailable = event => {
+
+            if (event.data &&
+                event.data.size > 0) {
+
+                audioChunks.push(event.data);
+            }
+
+        };
+
+
+        mediaRecorder.onstop =
+            processRecording;
+
+
+        mediaRecorder.start();
+
+
+        isRecording = true;
+
+
+        micButton.classList.add("recording");
+
+        micButton.textContent = "⏹️";
+
+        status.textContent =
+            "Listening... Speak now.";
+
+    }
+
+    catch (error) {
+
+        console.error(
+            "Microphone error:",
+            error
+        );
+
+        status.textContent =
+            "Please allow microphone access.";
+    }
+
+}
+
+
+/*
+ * Stop microphone
+ */
+
+function stopRecording() {
+
+    if (!mediaRecorder) {
+        return;
+    }
+
+
+    if (mediaRecorder.state === "recording") {
+
+        mediaRecorder.stop();
+    }
+
+
+    mediaRecorder.stream
+        .getTracks()
+        .forEach(track => track.stop());
+
+
+    isRecording = false;
+
+
+    micButton.classList.remove("recording");
+
+    micButton.textContent = "🎙️";
+
+    status.textContent =
+        "Processing your voice...";
+
+}
+
+
+/*
+ * Send recorded audio to Cloudflare Worker
+ */
+
+async function processRecording() {
+
+    if (audioChunks.length === 0) {
+
+        status.textContent =
+            "No audio detected. Please try again.";
+
+        return;
+    }
+
+
+    isProcessing = true;
+
+    micButton.classList.add("processing");
+
+
+    try {
+
+        const audioType =
+            mediaRecorder.mimeType ||
+            "audio/webm";
+
+
+        const audioBlob =
+            new Blob(
+                audioChunks,
+                {
+                    type: audioType
+                }
+            );
+
+
+        const formData =
+            new FormData();
+
+
+        formData.append(
+            "audio",
+            audioBlob,
+            "voice.webm"
+        );
+
+
+        /*
+         * Send audio to:
+         *
+         * Cloudflare Worker
+         *      ↓
+         * Whisper
+         *      ↓
+         * Llama
+         *      ↓
+         * Chatterbox
+         */
+
+        const response =
+            await fetch(
+                "/api/voice",
+                {
+                    method: "POST",
+                    body: formData
+                }
+            );
+
+
+        if (!response.ok) {
+
+            const errorText =
+                await response.text();
+
+            throw new Error(
+                errorText ||
+                "Voice request failed."
+            );
+        }
+
+
+        /*
+         * Get transcription and AI response
+         */
+
+        const userTextHeader =
+            response.headers.get(
+                "X-User-Text"
+            );
+
+
+        const aiTextHeader =
+            response.headers.get(
+                "X-AI-Response"
+            );
+
+
+        let userText = "";
+        let aiText = "";
+
+
+        if (userTextHeader) {
+
+            try {
+
+                userText =
+                    decodeURIComponent(
+                        userTextHeader
+                    );
+
+            } catch {
+
+                userText =
+                    userTextHeader;
+            }
+
+        }
+
+
+        if (aiTextHeader) {
+
+            try {
+
+                aiText =
+                    decodeURIComponent(
+                        aiTextHeader
+                    );
+
+            } catch {
+
+                aiText =
+                    aiTextHeader;
+            }
+
+        }
+
+
+        /*
+         * Display conversation
+         */
+
+        if (userText) {
+
+            addMessage(
+                "You",
+                userText,
+                "user"
+            );
+        }
+
+
+        if (aiText) {
+
+            addMessage(
+                "Speedbot",
+                aiText,
+                "assistant"
+            );
+        }
+
+
+        status.textContent =
+            "Playing response...";
+
+
+        /*
+         * Get Chatterbox WAV
+         */
+
+        const audioBlobResponse =
+            await response.blob();
+
+
+        const audioUrl =
+            URL.createObjectURL(
+                audioBlobResponse
+            );
+
+
+        const audio =
+            new Audio(audioUrl);
+
+
+        audio.onended = () => {
+
+            URL.revokeObjectURL(
+                audioUrl
+            );
+
+            status.textContent =
+                "Click the microphone to speak again.";
+
+            isProcessing = false;
+
+            micButton.classList.remove(
+                "processing"
+            );
+        };
+
+
+        audio.onerror = () => {
+
+            URL.revokeObjectURL(
+                audioUrl
+            );
+
+            status.textContent =
+                "Could not play the response.";
+
+            isProcessing = false;
+
+            micButton.classList.remove(
+                "processing"
+            );
+        };
+
+
+        await audio.play();
+
+    }
+
+    catch (error) {
+
+        console.error(
+            "Voice request error:",
+            error
+        );
+
+
+        status.textContent =
+            "Something went wrong. Please try again.";
+
+
+        isProcessing = false;
+
+        micButton.classList.remove(
+            "processing"
+        );
+    }
+
+}
+
+
+/*
+ * Add message to conversation
+ */
+
+function addMessage(
+    speaker,
+    text,
+    type
+) {
+
+    const message =
+        document.createElement("div");
+
+
+    message.className =
+        "message " + type;
+
+
+    const label =
+        document.createElement("div");
+
+
+    label.className =
+        "label";
+
+
+    label.textContent =
+        speaker;
+
+
+    const content =
+        document.createElement("div");
+
+
+    content.textContent =
+        text;
+
+
+    message.appendChild(
+        label
+    );
+
+
+    message.appendChild(
+        content
+    );
+
+
+    conversation.appendChild(
+        message
+    );
+
+
+    conversation.scrollTop =
+        conversation.scrollHeight;
+}
+
+</script>
+
+</body>
 </html>
