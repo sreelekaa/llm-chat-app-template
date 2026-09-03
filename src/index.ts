@@ -25,221 +25,267 @@ export default {
     // VOICE API
     // ============================================================
 
-    if (
-      url.pathname === "/api/voice" &&
-      request.method === "POST"
-    ) {
-      try {
-        // --------------------------------------------------------
-        // 1. RECEIVE AUDIO
-        // --------------------------------------------------------
+  if (
+  url.pathname === "/api/voice" &&
+  request.method === "POST"
+) {
+  try {
+    const formData = await request.formData();
+    const audioFile = formData.get("audio");
 
-        const formData = await request.formData();
-
-        const audioFile = formData.get("audio");
-
-        if (!audioFile) {
-          return Response.json(
-            {
-              success: false,
-              error: "audio is required"
-            },
-            { status: 400 }
-          );
-        }
-
-        const audioBuffer =
-          await (audioFile as File).arrayBuffer();
-
-        // --------------------------------------------------------
-        // 2. CONVERT AUDIO TO BASE64
-        // --------------------------------------------------------
-
-        const bytes =
-          new Uint8Array(audioBuffer);
-
-        let binary = "";
-
-        for (let i = 0; i < bytes.length; i++) {
-          binary += String.fromCharCode(bytes[i]);
-        }
-
-        const audioBase64 = btoa(binary);
-
-        // --------------------------------------------------------
-        // 3. SPEECH TO TEXT - WHISPER
-        // --------------------------------------------------------
-
-        const transcription =
-          await env.AI.run(STT_MODEL, {
-            audio: audioBase64,
-            task: "transcribe",
-            language: "en"
-          });
-
-        const userText =
-          transcription.text?.trim();
-
-        if (!userText) {
-          return Response.json(
-            {
-              success: false,
-              error: "Could not understand the audio"
-            },
-            { status: 400 }
-          );
-        }
-
-        console.log("USER:", userText);
-
-        // --------------------------------------------------------
-        // 4. LLM - LLAMA
-        // --------------------------------------------------------
-
-        const result =
-          await env.AI.run(
-            MODEL_ID,
-            {
-              messages: [
-                {
-                  role: "system",
-                  content: SYSTEM_PROMPT
-                },
-                {
-                  role: "user",
-                  content: userText
-                }
-              ],
-
-              max_tokens: 100,
-              temperature: 0.6
-            }
-          );
-
-        const aiText =
-          result.response?.trim();
-
-        if (!aiText) {
-          return Response.json(
-            {
-              success: false,
-              error: "AI did not return a response"
-            },
-            { status: 500 }
-          );
-        }
-
-        console.log("AI:", aiText);
-
-        // --------------------------------------------------------
-        // 5. SEND AI RESPONSE TO CHATTERBOX
-        // --------------------------------------------------------
-
-        const ttsForm =
-          new FormData();
-
-        ttsForm.append(
-          "text",
-          aiText
-        );
-
-        console.log(
-          "Sending text to Chatterbox..."
-        );
-
-        const ttsResponse =
-          await fetch(
-            `${env.CHATTERBOX_URL}/tts`,
-            {
-              method: "POST",
-              body: ttsForm
-            }
-          );
-
-        // --------------------------------------------------------
-        // 6. CHECK CHATTERBOX RESPONSE
-        // --------------------------------------------------------
-
-        if (!ttsResponse.ok) {
-          const errorText =
-            await ttsResponse.text();
-
-          console.error(
-            "Chatterbox error:",
-            errorText
-          );
-
-          return Response.json(
-            {
-              success: false,
-              error: "Chatterbox TTS failed",
-              details: errorText
-            },
-            { status: 502 }
-          );
-        }
-
-        // --------------------------------------------------------
-        // 7. GET GENERATED AUDIO
-        // --------------------------------------------------------
-
-        const audio =
-          await ttsResponse.arrayBuffer();
-
-        console.log(
-          "Chatterbox audio received:",
-          audio.byteLength,
-          "bytes"
-        );
-
-        // --------------------------------------------------------
-        // 8. RETURN AUDIO TO BROWSER
-        // --------------------------------------------------------
-
-        return new Response(
-          audio,
-          {
-            status: 200,
-
-            headers: {
-              "Content-Type":
-                "audio/wav",
-
-              "X-User-Text":
-                encodeURIComponent(
-                  userText
-                ),
-
-              "X-AI-Response":
-                encodeURIComponent(
-                  aiText
-                ),
-
-              "Access-Control-Allow-Origin":
-                "*"
-            }
-          }
-        );
-
-      } catch (error: any) {
-
-        console.error(
-          "VOICE ERROR:",
-          error
-        );
-
-        return Response.json(
-          {
-            success: false,
-            error:
-              error?.message ||
-              "Unknown error"
-          },
-          { status: 500 }
-        );
-      }
+    if (!audioFile) {
+      return Response.json(
+        {
+          success: false,
+          error: "audio is required"
+        },
+        { status: 400 }
+      );
     }
 
+    // ----------------------------------------------------
+    // 1. SPEECH → TEXT
+    // ----------------------------------------------------
+
+    const audioBuffer =
+      await (audioFile as File).arrayBuffer();
+
+    const bytes =
+      new Uint8Array(audioBuffer);
+
+    let binary = "";
+
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+
+    const audioBase64 = btoa(binary);
+
+    const transcription =
+      await env.AI.run(STT_MODEL, {
+        audio: audioBase64,
+        task: "transcribe",
+        language: "en"
+      });
+
+    const userText =
+      transcription.text?.trim();
+
+    if (!userText) {
+      return Response.json(
+        {
+          success: false,
+          error: "Could not understand the audio"
+        },
+        { status: 400 }
+      );
+    }
+
+    console.log("USER:", userText);
+
+    // ----------------------------------------------------
+    // 2. LLM
+    // ----------------------------------------------------
+
+    const result =
+      await env.AI.run(
+        MODEL_ID,
+        {
+          messages: [
+            {
+              role: "system",
+              content: SYSTEM_PROMPT
+            },
+            {
+              role: "user",
+              content: userText
+            }
+          ],
+          max_tokens: 100,
+          temperature: 0.6
+        }
+      );
+
+    const aiText =
+      result.response?.trim();
+
+    console.log("AI:", aiText);
+
+    // ----------------------------------------------------
+    // 3. SPLIT RESPONSE INTO SHORT SENTENCES
+    // ----------------------------------------------------
+
+    const sentences =
+      aiText
+        .match(/[^.!?]+[.!?]+|[^.!?]+$/g)
+        ?.map((s: string) => s.trim())
+        .filter(Boolean) || [aiText];
+
+    console.log(
+      "TTS chunks:",
+      sentences
+    );
+
+    // ----------------------------------------------------
+    // 4. GENERATE FIRST CHUNK
+    // ----------------------------------------------------
+
+    const firstSentence =
+      sentences[0];
+
+    const ttsForm =
+      new FormData();
+
+    ttsForm.append(
+      "text",
+      firstSentence
+    );
+
+    const ttsResponse =
+      await fetch(
+        `${env.CHATTERBOX_URL}/tts`,
+        {
+          method: "POST",
+          body: ttsForm
+        }
+      );
+
+    if (!ttsResponse.ok) {
+      const errorText =
+        await ttsResponse.text();
+
+      return Response.json(
+        {
+          success: false,
+          error: "Chatterbox TTS failed",
+          details: errorText
+        },
+        { status: 502 }
+      );
+    }
+
+    const audio =
+      await ttsResponse.arrayBuffer();
+
+    // ----------------------------------------------------
+    // 5. RETURN FIRST AUDIO IMMEDIATELY
+    // ----------------------------------------------------
+
+    return new Response(audio, {
+      status: 200,
+      headers: {
+        "Content-Type": "audio/wav",
+
+        "X-User-Text":
+          encodeURIComponent(userText),
+
+        "X-AI-Response":
+          encodeURIComponent(aiText),
+
+        "X-TTS-Chunks":
+          encodeURIComponent(
+            JSON.stringify(sentences)
+          ),
+
+        "Access-Control-Allow-Origin": "*"
+      }
+    });
+
+  } catch (error) {
+
+    console.error(
+      "VOICE ERROR:",
+      error
+    );
+
+    return Response.json(
+      {
+        success: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unknown error"
+      },
+      { status: 500 }
+    );
+  }
+}
+    //=============================================================
+   // /api/tts
+    //=============================================================
+
+    if (
+  url.pathname === "/api/tts" &&
+  request.method === "POST"
+) {
+  try {
+    const body = await request.json();
+
+    const text =
+      body.text?.trim();
+
+    if (!text) {
+      return Response.json(
+        {
+          success: false,
+          error: "text is required"
+        },
+        { status: 400 }
+      );
+    }
+
+    const formData =
+      new FormData();
+
+    formData.append(
+      "text",
+      text
+    );
+
+    const response =
+      await fetch(
+        `${env.CHATTERBOX_URL}/tts`,
+        {
+          method: "POST",
+          body: formData
+        }
+      );
+
+    if (!response.ok) {
+      return Response.json(
+        {
+          success: false,
+          error: "Chatterbox TTS failed"
+        },
+        { status: 502 }
+      );
+    }
+
+    const audio =
+      await response.arrayBuffer();
+
+    return new Response(audio, {
+      status: 200,
+      headers: {
+        "Content-Type": "audio/wav",
+        "Access-Control-Allow-Origin": "*"
+      }
+    });
+
+  } catch (error) {
+
+    return Response.json(
+      {
+        success: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unknown error"
+      },
+      { status: 500 }
+    );
+  }
+}
     // ============================================================
     // SPEEDBOT FRONTEND
     // ============================================================
@@ -893,49 +939,27 @@ async function processRecording() {
 
   try {
 
-    // --------------------------------------------------------
-    // CREATE AUDIO BLOB
-    // --------------------------------------------------------
-
     const audioBlob =
       new Blob(
         audioChunks,
         {
-          type:
-            "audio/webm"
+          type: "audio/webm"
         }
       );
 
-
-    if (
-      audioBlob.size === 0
-    ) {
-
+    if (audioBlob.size === 0) {
       status.textContent =
         "No audio detected.";
-
       return;
-
     }
-
-
-    // --------------------------------------------------------
-    // SHOW USER MESSAGE
-    // --------------------------------------------------------
 
     addMessage(
       "You",
       "Voice message..."
     );
 
-
-    // --------------------------------------------------------
-    // SEND AUDIO TO WORKER
-    // --------------------------------------------------------
-
     const formData =
       new FormData();
-
 
     formData.append(
       "audio",
@@ -943,10 +967,12 @@ async function processRecording() {
       "voice.webm"
     );
 
-
     status.textContent =
       "Thinking...";
 
+    // ---------------------------------------------
+    // STT + LLM + FIRST TTS
+    // ---------------------------------------------
 
     const response =
       await fetch(
@@ -957,18 +983,12 @@ async function processRecording() {
         }
       );
 
-
-    // --------------------------------------------------------
-    // CHECK RESPONSE
-    // --------------------------------------------------------
-
     if (!response.ok) {
 
       let errorText =
         "Voice request failed.";
 
       try {
-
         const errorData =
           await response.json();
 
@@ -976,94 +996,175 @@ async function processRecording() {
           errorData.error ||
           errorText;
 
-      }
-
-      catch (_) {}
+      } catch (_) {}
 
       throw new Error(
         errorText
       );
-
     }
 
+    // ---------------------------------------------
+    // GET AI TEXT
+    // ---------------------------------------------
 
-    // --------------------------------------------------------
-    // READ AI RESPONSE
-    // --------------------------------------------------------
-
-    const aiResponse =
+    const aiHeader =
       response.headers.get(
         "X-AI-Response"
       );
 
+    let aiText = "";
 
-    if (aiResponse) {
+    if (aiHeader) {
 
-      const decoded =
+      aiText =
         decodeURIComponent(
-          aiResponse
+          aiHeader
         );
 
       addMessage(
         "Speedbot",
-        decoded
+        aiText
       );
-
     }
 
+    // ---------------------------------------------
+    // GET SENTENCE CHUNKS
+    // ---------------------------------------------
 
-    // --------------------------------------------------------
-    // GET AUDIO
-    // --------------------------------------------------------
-
-    const audioBuffer =
-      await response.arrayBuffer();
-
-
-    const audioBlobResponse =
-      new Blob(
-        [audioBuffer],
-        {
-          type:
-            "audio/wav"
-        }
+    const chunksHeader =
+      response.headers.get(
+        "X-TTS-Chunks"
       );
 
+    let chunks = [];
 
-    const audioUrl =
-      URL.createObjectURL(
-        audioBlobResponse
-      );
+    if (chunksHeader) {
 
+      chunks =
+        JSON.parse(
+          decodeURIComponent(
+            chunksHeader
+          )
+        );
+    }
 
-    const audio =
-      new Audio(
-        audioUrl
-      );
+    if (!chunks.length) {
+      chunks = [aiText];
+    }
 
+    // ---------------------------------------------
+    // FIRST AUDIO IS ALREADY GENERATED
+    // ---------------------------------------------
 
     status.textContent =
       "Speaking...";
 
+    const firstBuffer =
+      await response.arrayBuffer();
 
-    // --------------------------------------------------------
-    // PLAY AI VOICE
-    // --------------------------------------------------------
+    const firstBlob =
+      new Blob(
+        [firstBuffer],
+        {
+          type: "audio/wav"
+        }
+      );
 
-    audio.onended =
-      () => {
+    const firstUrl =
+      URL.createObjectURL(
+        firstBlob
+      );
 
-        URL.revokeObjectURL(
-          audioUrl
+    const firstAudio =
+      new Audio(firstUrl);
+
+    // ---------------------------------------------
+    // PLAY FIRST SENTENCE IMMEDIATELY
+    // ---------------------------------------------
+
+    await firstAudio.play();
+
+    // ---------------------------------------------
+    // GENERATE REMAINING SENTENCES
+    // ---------------------------------------------
+
+    for (
+      let i = 1;
+      i < chunks.length;
+      i++
+    ) {
+
+      const chunk =
+        chunks[i];
+
+      status.textContent =
+        "Speaking...";
+
+      const ttsResponse =
+        await fetch(
+          "/api/tts",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/json"
+            },
+            body: JSON.stringify({
+              text: chunk
+            })
+          }
         );
 
-        status.textContent =
-          "Click the microphone and speak";
+      if (!ttsResponse.ok) {
+        console.error(
+          "TTS chunk failed"
+        );
+        break;
+      }
 
-      };
+      const buffer =
+        await ttsResponse.arrayBuffer();
 
+      const blob =
+        new Blob(
+          [buffer],
+          {
+            type: "audio/wav"
+          }
+        );
 
-    await audio.play();
+      const url =
+        URL.createObjectURL(
+          blob
+        );
+
+      const audio =
+        new Audio(url);
+
+      await new Promise(
+        resolve => {
+
+          audio.onended =
+            () => {
+
+              URL.revokeObjectURL(
+                url
+              );
+
+              resolve();
+            };
+
+          audio.play();
+        }
+      );
+    }
+
+    URL.revokeObjectURL(
+      firstUrl
+    );
+
+    status.textContent =
+      "Click the microphone and speak";
 
   }
 
@@ -1074,15 +1175,14 @@ async function processRecording() {
       error
     );
 
-
     status.textContent =
       "Error: " +
-      error.message;
-
+      (
+        error.message ||
+        "Voice request failed"
+      );
   }
-
 }
-
 
 // ============================================================
 // ADD MESSAGE
