@@ -129,7 +129,7 @@ export default {
                     ) &&
                     typeof message.content === "string"
                 )
-                .slice(-10);
+                .slice(-6);
 
             }
 
@@ -1321,23 +1321,6 @@ function detectSilence(
   return;
 }
 
-      // Stop after
-      // 1200ms silence.
-
-      if (
-        recordingDuration > 500 &&
-        Date.now() -
-          silenceStart >
-          500
-      ) {
-
-        stopVoice();
-
-        audioContext.close();
-
-        return;
-
-      }
 
     } else {
 
@@ -1603,7 +1586,7 @@ async function processRecording() {
 
     conversationHistory =
       conversationHistory
-        .slice(-10);
+        .slice(-6);
 
 
     // --------------------------------------------------------
@@ -1828,20 +1811,10 @@ async function processRecording() {
         "Listening...";
 
 
-      setTimeout(
-        () => {
-
-          if (
-            voiceModeActive
-          ) {
-
-            startListening();
-
-          }
-
-        },
-        300
-      );
+      // Start listening again immediately.
+      if (voiceModeActive) {
+        startListening();
+      }
 
     }
 
