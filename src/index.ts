@@ -1838,52 +1838,55 @@ async function processRecording() {
 
     }
 
+} catch (error) {
 
-  } catch (error) {
+  console.error(
+    "VOICE ERROR:",
+    error
+  );
 
-    console.error(
-      "VOICE ERROR:",
-      error
+  const errorMessage =
+    error instanceof Error
+      ? error.message
+      : String(error);
+
+  console.error(
+    "ACTUAL ERROR:",
+    errorMessage
+  );
+
+  if (voiceModeActive) {
+
+    status.textContent =
+      "Error: " + errorMessage;
+
+    // Wait before trying again
+    setTimeout(
+      () => {
+
+        if (
+          voiceModeActive &&
+          !isRecording &&
+          !processing
+        ) {
+
+          startListening();
+
+        }
+
+      },
+      1500
     );
 
+  } else {
 
-    if (
-      voiceModeActive
-    ) {
-
-      status.textContent =
-        "Something went wrong. Listening again...";
-
-
-      setTimeout(
-        () => {
-
-          if (
-            voiceModeActive
-          ) {
-
-            startListening();
-
-          }
-
-        },
-        1000
-      );
-
-    } else {
-
-      status.textContent =
-        "Voice Mode stopped.";
-
-    }
+    status.textContent =
+      "Error: " + errorMessage;
 
   }
 
-
-  processing = false;
-
 }
-
+processing = false;
 
 // ============================================================
 // FETCH TTS
