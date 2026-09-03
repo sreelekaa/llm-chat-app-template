@@ -153,27 +153,35 @@ async function handleVoiceTurn(
       })
     );
 
-    // Generate remaining sentences after the first one so the
-    // first audio can start playing as soon as possible.
-    for (let i = 1; i < reply.sentences.length; i++) {
-      try {
-        const nextAudio = await callChatterbox(
-          env,
-          reply.sentences[i]
-        );
+    // IMPORTANT: do NOT await each later sentence one-by-one.
+    // The old sequential loop caused a long silence between sentences
+    // because every Chatterbox request had to finish before the next
+    // request even started. Start the remaining requests together while
+    // the browser is already playing sentence #1.
+    if (reply.sentences.length > 1) {
+      const remaining = reply.sentences.slice(1).map(async (sentence, offset) => {
+        const index = offset + 1;
 
-        ws.send(
-          JSON.stringify({
-            type: "audio_chunk",
-            index: i,
-            text: reply.sentences[i],
-          })
-        );
+        try {
+          const nextAudio = await callChatterbox(env, sentence);
 
-        ws.send(nextAudio);
-      } catch (error) {
-        console.error("Additional TTS error:", error);
-      }
+          ws.send(
+            JSON.stringify({
+              type: "audio_chunk",
+              index,
+              text: sentence,
+            })
+          );
+
+          ws.send(nextAudio);
+        } catch (error) {
+          console.error("Additional TTS error:", error);
+        }
+      });
+
+      // Keep the WebSocket turn alive until all generated audio has
+      // been delivered, but don't delay the first sentence.
+      await Promise.allSettled(remaining);
     }
 
     ws.send(
