@@ -1838,56 +1838,58 @@ async function processRecording() {
 
     }
 
-} catch (error) {
+  } catch (error) {
 
-  console.error(
-    "VOICE ERROR:",
-    error
-  );
-
-  const errorMessage =
-    error instanceof Error
-      ? error.message
-      : String(error);
-
-  console.error(
-    "ACTUAL ERROR:",
-    errorMessage
-  );
-
-  if (voiceModeActive) {
-
-    status.textContent =
-      "Error: " + errorMessage;
-
-    // Wait before trying again
-    setTimeout(
-      () => {
-
-        if (
-          voiceModeActive &&
-          !isRecording &&
-          !processing
-        ) {
-
-          startListening();
-
-        }
-
-      },
-      1500
+    console.error(
+      "VOICE ERROR:",
+      error
     );
 
-  } else {
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : String(error);
 
-    status.textContent =
-      "Error: " + errorMessage;
+    console.error(
+      "ACTUAL ERROR:",
+      errorMessage
+    );
+
+    if (voiceModeActive) {
+
+      status.textContent =
+        "Error: " + errorMessage;
+
+      setTimeout(
+        () => {
+
+          if (
+            voiceModeActive &&
+            !isRecording &&
+            !processing
+          ) {
+
+            startListening();
+
+          }
+
+        },
+        1500
+      );
+
+    } else {
+
+      status.textContent =
+        "Error: " + errorMessage;
+
+    }
 
   }
 
+  processing = false;
 }
-processing = false;
-
+  // ============================================================
+  // FETCH TTS
 // ============================================================
 // FETCH TTS
 // ============================================================
