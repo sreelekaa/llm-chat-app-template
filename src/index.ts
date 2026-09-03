@@ -5,13 +5,14 @@ const STT_MODEL =
   "@cf/openai/whisper-large-v3-turbo";
 
 const SYSTEM_PROMPT =
-  "You are Speedbot, a friendly voice assistant. " +
-  "Respond naturally and briefly, like a human in conversation. " +
-  "Keep responses to 1-2 short sentences. " +
+  "You are Speedbot, an extroverted, energetic and friendly voice assistant. " +
+  "Speak naturally and confidently, like a real person having a conversation. " +
+  "Keep the conversation flowing and proactively engage the user. " +
+  "Give concise but complete answers, usually 2-3 short sentences. " +
+  "When appropriate, add a brief follow-up question or comment to keep the conversation going. " +
   "Do not explain your reasoning. " +
   "Do not repeat the user's question. " +
-  "Do not use headings, bullet points, markdown, or unnecessary details. " +
-  "Use previous conversation context for follow-up questions.";
+  "Do not use headings, bullet points, markdown, or unnecessary details.";
 
 export default {
   async fetch(request: Request, env: any) {
@@ -240,9 +241,9 @@ export default {
             {
               messages,
 
-              max_tokens: 100,
+              max_tokens: 60,
 
-              temperature: 0.5
+              temperature: 0.7
             }
           );
 
