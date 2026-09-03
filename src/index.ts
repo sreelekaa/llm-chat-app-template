@@ -1312,16 +1312,23 @@ function detectSilence(
       const recordingDuration =
         Date.now() -
         recordingStarted;
-
+     if (
+  recordingDuration > 400 &&
+  Date.now() - silenceStart > 500
+) {
+  stopVoice();
+  audioContext.close();
+  return;
+}
 
       // Stop after
       // 1200ms silence.
 
       if (
-        recordingDuration > 700 &&
+        recordingDuration > 500 &&
         Date.now() -
           silenceStart >
-          1200
+          500
       ) {
 
         stopVoice();
