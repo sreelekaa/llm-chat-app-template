@@ -1,2119 +1,1074 @@
-const MODEL_ID =
-  "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
-
-const STT_MODEL =
-  "@cf/openai/whisper-large-v3-turbo";
+const MODEL_ID = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const FLUX_MODEL = "@cf/deepgram/flux";
 
 const SYSTEM_PROMPT =
   "You are Speedbot, an extroverted, energetic and friendly voice assistant. " +
   "Speak naturally and confidently, like a real person having a conversation. " +
   "Keep the conversation flowing and proactively engage the user. " +
-  "Give concise but complete answers, usually 2-3 short sentences. " +
+  "Give concise but complete answers, usually 1-2 short sentences. " +
   "When appropriate, add a brief follow-up question or comment to keep the conversation going. " +
   "Do not explain your reasoning. " +
   "Do not repeat the user's question. " +
   "Do not use headings, bullet points, markdown, or unnecessary details.";
 
-export default {
-  async fetch(request: Request, env: any) {
-
-    const url = new URL(request.url);
-
-    // ============================================================
-    // HEALTH CHECK
-    // ============================================================
-
-    if (url.pathname === "/api/health") {
-
-      return Response.json({
-        status: "ok",
-        service: "Speedbot Custom Voice Agent"
-      });
-
-    }
-
-    // ============================================================
-    // CONFIG CHECK
-    // ============================================================
-
-    if (url.pathname === "/api/config-check") {
-
-      return Response.json({
-        chatterbox_configured:
-          Boolean(env.CHATTERBOX_URL),
-
-        chatterbox_url_valid:
-          Boolean(
-            env.CHATTERBOX_URL &&
-            /^https?:\/\//.test(
-              env.CHATTERBOX_URL
-            )
-          )
-      });
-
-    }
-
-    // ============================================================
-    // VOICE API
-    //
-    // Browser audio
-    //       ↓
-    // Whisper
-    //       ↓
-    // Llama
-    //       ↓
-    // Chatterbox
-    //       ↓
-    // WAV
-    // ============================================================
-
-    if (
-      url.pathname === "/api/voice" &&
-      request.method === "POST"
-    ) {
-
-      try {
-
-        // --------------------------------------------------------
-        // READ FORM DATA
-        // --------------------------------------------------------
-
-        const formData =
-          await request.formData();
-
-        const audioFile =
-          formData.get("audio");
-
-        if (!audioFile) {
-
-          return Response.json(
-            {
-              success: false,
-              error: "audio is required"
-            },
-            {
-              status: 400
-            }
-          );
-
-        }
-
-        // --------------------------------------------------------
-        // CONVERSATION HISTORY
-        // --------------------------------------------------------
-
-        let history: any[] = [];
-
-        try {
-
-          const historyText =
-            formData.get("history");
-
-          if (
-            historyText &&
-            typeof historyText === "string"
-          ) {
-
-            const parsed =
-              JSON.parse(historyText);
-
-            if (Array.isArray(parsed)) {
-
-              history = parsed
-                .filter(
-                  (message) =>
-                    message &&
-                    (
-                      message.role === "user" ||
-                      message.role === "assistant"
-                    ) &&
-                    typeof message.content === "string"
-                )
-                .slice(-6);
-
-            }
-
-          }
-
-        } catch (error) {
-
-          console.log(
-            "Could not parse conversation history"
-          );
-
-        }
-
-        // --------------------------------------------------------
-        // AUDIO → BASE64
-        // --------------------------------------------------------
-
-        const audioBuffer =
-          await (audioFile as File)
-            .arrayBuffer();
-
-        const bytes =
-          new Uint8Array(
-            audioBuffer
-          );
-
-        let binary = "";
-
-        for (
-          let i = 0;
-          i < bytes.length;
-          i++
-        ) {
-
-          binary +=
-            String.fromCharCode(
-              bytes[i]
-            );
-
-        }
-
-        const audioBase64 =
-          btoa(binary);
-
-        // --------------------------------------------------------
-        // SPEECH TO TEXT
-        // --------------------------------------------------------
-
-        const transcription =
-          await env.AI.run(
-            STT_MODEL,
-            {
-              audio: audioBase64,
-              task: "transcribe",
-              language: "en"
-            }
-          );
-
-        const userText =
-          transcription.text?.trim();
-
-        if (!userText) {
-
-          return Response.json(
-            {
-              success: false,
-              error:
-                "Could not understand the audio"
-            },
-            {
-              status: 400
-            }
-          );
-
-        }
-
-        console.log(
-          "USER:",
-          userText
-        );
-
-        // --------------------------------------------------------
-        // BUILD CONVERSATION
-        // --------------------------------------------------------
-
-        const messages = [
-
-          {
-            role: "system",
-            content: SYSTEM_PROMPT
-          },
-
-          ...history,
-
-          {
-            role: "user",
-            content: userText
-          }
-
-        ];
-
-        // --------------------------------------------------------
-        // LLM
-        // --------------------------------------------------------
-
-        const result =
-          await env.AI.run(
-            MODEL_ID,
-            {
-              messages,
-
-              max_tokens: 60,
-
-              temperature: 0.7
-            }
-          );
-
-        const aiText =
-          result.response?.trim();
-
-        if (!aiText) {
-
-          return Response.json(
-            {
-              success: false,
-              error:
-                "The AI did not return a response"
-            },
-            {
-              status: 500
-            }
-          );
-
-        }
-
-        console.log(
-          "AI:",
-          aiText
-        );
-
-        // --------------------------------------------------------
-        // SPLIT RESPONSE INTO SENTENCES
-        // --------------------------------------------------------
-
-        const sentences =
-          aiText
-            .match(
-              /[^.!?]+[.!?]+|[^.!?]+$/g
-            )
-            ?.map(
-              (sentence: string) =>
-                sentence.trim()
-            )
-            .filter(Boolean)
-            ||
-            [aiText];
-
-        console.log(
-          "TTS chunks:",
-          sentences
-        );
-
-        // --------------------------------------------------------
-        // FIRST SENTENCE → CHATTERBOX
-        // --------------------------------------------------------
-
-        const firstSentence =
-          sentences[0];
-
-        const ttsForm =
-          new FormData();
-
-        ttsForm.append(
-          "text",
-          firstSentence
-        );
-
-        if (!env.CHATTERBOX_URL) {
-
-          return Response.json(
-            {
-              success: false,
-              error:
-                "CHATTERBOX_URL is not configured"
-            },
-            {
-              status: 500
-            }
-          );
-
-        }
-
-        const ttsResponse =
-          await fetch(
-            `${env.CHATTERBOX_URL}/tts`,
-            {
-              method: "POST",
-              body: ttsForm
-            }
-          );
-
-        if (!ttsResponse.ok) {
-
-          const errorText =
-            await ttsResponse.text();
-
-          return Response.json(
-            {
-              success: false,
-              error:
-                "Chatterbox TTS failed",
-              details:
-                errorText
-            },
-            {
-              status: 502
-            }
-          );
-
-        }
-
-        const audio =
-          await ttsResponse.arrayBuffer();
-
-        // --------------------------------------------------------
-        // RETURN AUDIO + TEXT
-        // --------------------------------------------------------
-
-        return new Response(
-          audio,
-          {
-            status: 200,
-
-            headers: {
-
-              "Content-Type":
-                "audio/wav",
-
-              "X-User-Text":
-                encodeURIComponent(
-                  userText
-                ),
-
-              "X-AI-Response":
-                encodeURIComponent(
-                  aiText
-                ),
-
-              "X-TTS-Chunks":
-                encodeURIComponent(
-                  JSON.stringify(
-                    sentences
-                  )
-                ),
-
-              "Access-Control-Allow-Origin":
-                "*"
-
-            }
-          }
-        );
-
-      } catch (error) {
-
-        console.error(
-          "VOICE ERROR:",
-          error
-        );
-
-        return Response.json(
-          {
-            success: false,
-
-            error:
-              error instanceof Error
-                ? error.message
-                : "Unknown error"
-          },
-          {
-            status: 500
-          }
-        );
-
-      }
-
-    }
-
-    // ============================================================
-    // TEXT → TTS
-    //
-    // Used for:
-    // - Remaining sentences
-    // - Voice greeting
-    // ============================================================
-
-    if (
-      url.pathname === "/api/tts" &&
-      request.method === "POST"
-    ) {
-
-      try {
-
-        const body =
-          await request.json();
-
-        const text =
-          body.text?.trim();
-
-        if (!text) {
-
-          return Response.json(
-            {
-              success: false,
-              error: "text is required"
-            },
-            {
-              status: 400
-            }
-          );
-
-        }
-
-        if (!env.CHATTERBOX_URL) {
-
-          return Response.json(
-            {
-              success: false,
-              error:
-                "CHATTERBOX_URL is not configured"
-            },
-            {
-              status: 500
-            }
-          );
-
-        }
-
-        const formData =
-          new FormData();
-
-        formData.append(
-          "text",
-          text
-        );
-
-        const response =
-          await fetch(
-            `${env.CHATTERBOX_URL}/tts`,
-            {
-              method: "POST",
-              body: formData
-            }
-          );
-
-        if (!response.ok) {
-
-          const errorText =
-            await response.text();
-
-          return Response.json(
-            {
-              success: false,
-              error:
-                "Chatterbox TTS failed",
-              details:
-                errorText
-            },
-            {
-              status: 502
-            }
-          );
-
-        }
-
-        const audio =
-          await response.arrayBuffer();
-
-        return new Response(
-          audio,
-          {
-            status: 200,
-
-            headers: {
-              "Content-Type":
-                "audio/wav",
-
-              "Access-Control-Allow-Origin":
-                "*"
-            }
-          }
-        );
-
-      } catch (error) {
-
-        console.error(
-          "TTS ERROR:",
-          error
-        );
-
-        return Response.json(
-          {
-            success: false,
-
-            error:
-              error instanceof Error
-                ? error.message
-                : "Unknown error"
-          },
-          {
-            status: 500
-          }
-        );
-
-      }
-
-    }
-
-    // ============================================================
-    // VOICE ASSISTANT UI
-    // ============================================================
-
-    if (url.pathname === "/") {
-
-      return new Response(
-        `<!DOCTYPE html>
-
-<html lang="en">
-
-<head>
-
-<meta charset="UTF-8">
-
-<meta
-  name="viewport"
-  content="width=device-width, initial-scale=1.0"
-/>
-
-<title>
-Speedbot Voice Assistant
-</title>
-
-<style>
-
-* {
-  box-sizing: border-box;
+const MAX_HISTORY = 6;
+
+function json(data: any, status = 200) {
+  return Response.json(data, {
+    status,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+      "Access-Control-Allow-Headers": "*",
+    },
+  });
 }
 
-body {
+function splitSentences(text: string): string[] {
+  return (
+    text
+      .match(/[^.!?]+[.!?]+|[^.!?]+$/g)
+      ?.map((s) => s.trim())
+      .filter(Boolean) || [text]
+  );
+}
 
-  margin: 0;
+async function callChatterbox(env: any, text: string): Promise<ArrayBuffer> {
+  if (!env.CHATTERBOX_URL) {
+    throw new Error("CHATTERBOX_URL is not configured");
+  }
 
-  min-height: 100vh;
+  const form = new FormData();
+  form.append("text", text);
 
-  font-family:
-    Inter,
-    Arial,
-    sans-serif;
+  const response = await fetch(`${env.CHATTERBOX_URL}/tts`, {
+    method: "POST",
+    body: form,
+  });
 
-  background:
-    linear-gradient(
-      135deg,
-      #f8fafc,
-      #eef2ff
+  if (!response.ok) {
+    throw new Error(
+      `Chatterbox TTS failed: ${await response.text()}`
+    );
+  }
+
+  return response.arrayBuffer();
+}
+
+async function generateReply(
+  env: any,
+  userText: string,
+  history: any[]
+) {
+  const safeHistory = Array.isArray(history)
+    ? history
+        .filter(
+          (m) =>
+            m &&
+            (m.role === "user" || m.role === "assistant") &&
+            typeof m.content === "string"
+        )
+        .slice(-MAX_HISTORY)
+    : [];
+
+  const result = await env.AI.run(MODEL_ID, {
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      ...safeHistory,
+      { role: "user", content: userText },
+    ],
+    max_tokens: 55,
+    temperature: 0.7,
+  });
+
+  const aiText = result.response?.trim();
+
+  if (!aiText) {
+    throw new Error("The AI did not return a response");
+  }
+
+  const sentences = splitSentences(aiText);
+
+  return {
+    aiText,
+    sentences,
+    firstSentence: sentences[0],
+  };
+}
+
+async function handleVoiceTurn(
+  env: any,
+  ws: WebSocket,
+  userText: string,
+  history: any[]
+) {
+  if (!userText.trim()) return;
+
+  try {
+    ws.send(
+      JSON.stringify({
+        type: "user_final",
+        text: userText,
+      })
     );
 
-  display: flex;
+    ws.send(
+      JSON.stringify({
+        type: "status",
+        value: "thinking",
+      })
+    );
 
-  justify-content: center;
+    const reply = await generateReply(env, userText, history);
 
-  align-items: center;
+    const newHistory = [
+      ...(Array.isArray(history) ? history : []),
+      { role: "user", content: userText },
+      { role: "assistant", content: reply.aiText },
+    ].slice(-MAX_HISTORY);
 
-  color: #111827;
+    const audio = await callChatterbox(env, reply.firstSentence);
 
+    ws.send(
+      JSON.stringify({
+        type: "assistant_text",
+        text: reply.aiText,
+        chunks: reply.sentences,
+        history: newHistory,
+      })
+    );
+
+    ws.send(
+      JSON.stringify({
+        type: "status",
+        value: "speaking",
+      })
+    );
+
+    ws.send(audio);
+
+    ws.send(
+      JSON.stringify({
+        type: "audio_end",
+      })
+    );
+
+    // Generate remaining sentences after the first one so the
+    // first audio can start playing as soon as possible.
+    for (let i = 1; i < reply.sentences.length; i++) {
+      try {
+        const nextAudio = await callChatterbox(
+          env,
+          reply.sentences[i]
+        );
+
+        ws.send(
+          JSON.stringify({
+            type: "audio_chunk",
+            index: i,
+            text: reply.sentences[i],
+          })
+        );
+
+        ws.send(nextAudio);
+      } catch (error) {
+        console.error("Additional TTS error:", error);
+      }
+    }
+
+    ws.send(
+      JSON.stringify({
+        type: "status",
+        value: "listening",
+      })
+    );
+  } catch (error) {
+    console.error("VOICE TURN ERROR:", error);
+
+    ws.send(
+      JSON.stringify({
+        type: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Voice processing failed",
+      })
+    );
+
+    ws.send(
+      JSON.stringify({
+        type: "status",
+        value: "listening",
+      })
+    );
+  }
 }
 
-.container {
-
-  width: 92%;
-
-  max-width: 700px;
-
-  background: white;
-
-  border-radius: 24px;
-
-  padding: 32px;
-
-  box-shadow:
-    0 20px 60px
-    rgba(0,0,0,0.12);
-
-}
-
-.header {
-
-  text-align: center;
-
-  margin-bottom: 20px;
-
-}
-
-.logo {
-
-  font-size: 42px;
-
-  margin-bottom: 8px;
-
-}
-
-h1 {
-
-  margin: 0;
-
-  font-size: 30px;
-
-}
-
-.subtitle {
-
-  margin-top: 8px;
-
-  color: #6b7280;
-
-  font-size: 15px;
-
-}
-
-.status {
-
-  text-align: center;
-
-  margin: 20px 0;
-
-  padding: 12px;
-
-  border-radius: 12px;
-
-  background: #f3f4f6;
-
-  color: #4b5563;
-
-  font-size: 14px;
-
-}
-
-.conversation {
-
-  height: 300px;
-
-  overflow-y: auto;
-
-  padding: 15px;
-
-  border-radius: 16px;
-
-  background: #f9fafb;
-
-  margin-bottom: 25px;
-
-}
-
-.message {
-
-  margin-bottom: 15px;
-
-  padding: 12px 15px;
-
-  border-radius: 14px;
-
-  max-width: 85%;
-
-  line-height: 1.5;
-
-  font-size: 14px;
-
-}
-
-.user {
-
-  margin-left: auto;
-
-  background: #e0e7ff;
-
-  text-align: right;
-
-}
-
-.ai {
-
-  margin-right: auto;
-
-  background: #f3f4f6;
-
-}
-
-.mic-container {
-
-  display: flex;
-
-  justify-content: center;
-
-  align-items: center;
-
-}
-
-.mic-button {
-
-  width: 88px;
-
-  height: 88px;
-
-  border: none;
-
-  border-radius: 50%;
-
-  background: #111827;
-
-  color: white;
-
-  font-size: 32px;
-
-  cursor: pointer;
-
-  transition:
-    transform 0.2s,
-    box-shadow 0.2s;
-
-}
-
-.mic-button:hover {
-
-  transform:
-    scale(1.05);
-
-}
-
-.mic-button.voice-mode {
-
-  background: #16a34a;
-
-}
-
-.mic-button.recording {
-
-  background: #dc2626;
-
-  box-shadow:
-    0 0 0 12px
-    rgba(220,38,38,0.15);
-
-  animation:
-    pulse 1.2s infinite;
-
-}
-
-@keyframes pulse {
-
-  0% {
-    transform: scale(1);
+async function handleFluxMessage(
+  env: any,
+  ws: WebSocket,
+  data: string | ArrayBuffer,
+  state: {
+    history: any[];
+    processingTurn: boolean;
+  }
+) {
+  if (typeof data !== "string") return;
+
+  let event: any;
+
+  try {
+    event = JSON.parse(data);
+  } catch {
+    return;
   }
 
-  50% {
-    transform: scale(1.08);
+  const eventType = event.event;
+
+  const transcript =
+    event.transcript ??
+    event.channel?.alternatives?.[0]?.transcript ??
+    "";
+
+  if (eventType === "Update") {
+    if (transcript) {
+      ws.send(
+        JSON.stringify({
+          type: "interim",
+          text: transcript,
+        })
+      );
+    }
+    return;
   }
 
-  100% {
-    transform: scale(1);
+  if (eventType === "StartOfTurn") {
+    ws.send(
+      JSON.stringify({
+        type: "status",
+        value: "listening",
+      })
+    );
+    return;
   }
 
+  if (eventType === "TurnResumed") {
+    ws.send(
+      JSON.stringify({
+        type: "status",
+        value: "listening",
+      })
+    );
+    return;
+  }
+
+  if (eventType === "EagerEndOfTurn") {
+    if (transcript) {
+      ws.send(
+        JSON.stringify({
+          type: "eager_final",
+          text: transcript,
+        })
+      );
+    }
+    return;
+  }
+
+  if (eventType === "EndOfTurn") {
+    if (!transcript || state.processingTurn) return;
+
+    state.processingTurn = true;
+
+    // Process the current turn without closing the Flux connection.
+    await handleVoiceTurn(
+      env,
+      ws,
+      transcript.trim(),
+      state.history
+    );
+
+    // The browser sends the updated history back with the next
+    // config message. Keep the local copy updated too.
+    state.history = [
+      ...state.history,
+      { role: "user", content: transcript.trim() },
+    ].slice(-MAX_HISTORY);
+
+    state.processingTurn = false;
+  }
 }
 
-.footer {
+function voiceWebSocket(request: Request, env: any): Promise<Response> | Response {
+  const upgrade = request.headers.get("Upgrade");
 
-  text-align: center;
+  if (upgrade?.toLowerCase() !== "websocket") {
+    return json(
+      {
+        success: false,
+        error: "WebSocket upgrade required",
+      },
+      426
+    );
+  }
 
-  margin-top: 20px;
+  const [client, server] = Object.values(new WebSocketPair());
 
-  font-size: 12px;
+  server.accept({ allowHalfOpen: true });
 
-  color: #9ca3af;
+  const state = {
+    history: [] as any[],
+    processingTurn: false,
+    upstream: null as WebSocket | null,
+  };
 
+  // Connect this client to Cloudflare Workers AI Deepgram Flux.
+  (async () => {
+    try {
+      const fluxResponse = await env.AI.run(
+        FLUX_MODEL,
+        {
+          encoding: "linear16",
+          sample_rate: "16000",
+          eager_eot_threshold: "0.45",
+          eot_threshold: "0.55",
+          eot_timeout_ms: "700",
+          keyterm: "Speedbot",
+          keyterm: "Cloudflare",
+          keyterm: "Chatterbox",
+        },
+        {
+          websocket: true,
+        }
+      );
+
+      const upstream = fluxResponse.webSocket;
+
+      if (!upstream) {
+        throw new Error("Flux WebSocket was not created");
+      }
+
+      state.upstream = upstream;
+      upstream.accept({ allowHalfOpen: true });
+
+      upstream.addEventListener("open", () => {
+        server.send(
+          JSON.stringify({
+            type: "ready",
+          })
+        );
+      });
+
+      upstream.addEventListener("message", async (event) => {
+        try {
+          await handleFluxMessage(
+            env,
+            server,
+            event.data,
+            state
+          );
+        } catch (error) {
+          console.error("Flux message error:", error);
+        }
+      });
+
+      upstream.addEventListener("error", (event) => {
+        console.error("Flux WebSocket error:", event);
+
+        try {
+          server.send(
+            JSON.stringify({
+              type: "error",
+              message: "Streaming speech recognition error",
+            })
+          );
+        } catch {}
+      });
+
+      upstream.addEventListener("close", () => {
+        try {
+          if (server.readyState !== WebSocket.CLOSED) {
+            server.close(1000, "Flux connection closed");
+          }
+        } catch {}
+      });
+    } catch (error) {
+      console.error("Could not connect to Flux:", error);
+
+      try {
+        server.send(
+          JSON.stringify({
+            type: "error",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Could not start streaming speech recognition",
+          })
+        );
+        server.close(1011, "Flux connection failed");
+      } catch {}
+    }
+  })();
+
+  server.addEventListener("message", async (event) => {
+    try {
+      // JSON messages are control/configuration messages.
+      if (typeof event.data === "string") {
+        let message: any;
+
+        try {
+          message = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+
+        if (message.type === "config") {
+          if (Array.isArray(message.history)) {
+            state.history = message.history
+              .filter(
+                (m: any) =>
+                  m &&
+                  (m.role === "user" || m.role === "assistant") &&
+                  typeof m.content === "string"
+              )
+              .slice(-MAX_HISTORY);
+          }
+
+          if (state.upstream) {
+            try {
+              state.upstream.send(
+                JSON.stringify({
+                  type: "config",
+                  language: "en",
+                })
+              );
+            } catch {}
+          }
+
+          return;
+        }
+
+        if (message.type === "ping") {
+          server.send(JSON.stringify({ type: "pong" }));
+          return;
+        }
+
+        if (message.type === "close") {
+          try {
+            state.upstream?.close(1000, "Client closed");
+          } catch {}
+
+          try {
+            server.close(1000, "Client closed");
+          } catch {}
+
+          return;
+        }
+
+        return;
+      }
+
+      // Raw binary audio is forwarded directly to Flux.
+      if (state.upstream?.readyState === WebSocket.OPEN) {
+        state.upstream.send(event.data);
+      }
+    } catch (error) {
+      console.error("Client WebSocket message error:", error);
+    }
+  });
+
+  server.addEventListener("close", () => {
+    try {
+      state.upstream?.close(1000, "Client disconnected");
+    } catch {}
+  });
+
+  server.addEventListener("error", (error) => {
+    console.error("Client WebSocket error:", error);
+
+    try {
+      state.upstream?.close(1011, "Client socket error");
+    } catch {}
+  });
+
+  return new Response(null, {
+    status: 101,
+    webSocket: client,
+  });
 }
 
+function html() {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Speedbot Voice Assistant</title>
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0;
+  min-height:100vh;
+  font-family:Inter,Arial,sans-serif;
+  background:linear-gradient(135deg,#f8fafc,#eef2ff);
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  color:#111827;
+}
+.container{
+  width:92%;
+  max-width:700px;
+  background:#fff;
+  border-radius:24px;
+  padding:32px;
+  box-shadow:0 20px 60px rgba(0,0,0,.12);
+}
+.header{text-align:center;margin-bottom:20px}
+.logo{font-size:42px;margin-bottom:8px}
+h1{margin:0;font-size:30px}
+.subtitle{margin-top:8px;color:#6b7280;font-size:15px}
+.status{
+  text-align:center;
+  margin:20px 0;
+  padding:12px;
+  border-radius:12px;
+  background:#f3f4f6;
+  color:#4b5563;
+  font-size:14px;
+}
+.conversation{
+  height:300px;
+  overflow-y:auto;
+  padding:15px;
+  border-radius:16px;
+  background:#f9fafb;
+  margin-bottom:25px;
+}
+.message{
+  margin-bottom:15px;
+  padding:12px 15px;
+  border-radius:14px;
+  max-width:85%;
+  line-height:1.5;
+  font-size:14px;
+}
+.user{margin-left:auto;background:#e0e7ff;text-align:right}
+.ai{margin-right:auto;background:#f3f4f6}
+.interim{
+  margin:8px auto;
+  padding:8px 12px;
+  color:#6b7280;
+  font-size:13px;
+  text-align:center;
+  font-style:italic;
+}
+.mic-container{
+  display:flex;
+  justify-content:center;
+  align-items:center;
+}
+.mic-button{
+  width:88px;
+  height:88px;
+  border:none;
+  border-radius:50%;
+  background:#111827;
+  color:#fff;
+  font-size:32px;
+  cursor:pointer;
+  transition:transform .2s,box-shadow .2s;
+}
+.mic-button:hover{transform:scale(1.05)}
+.mic-button.voice-mode{background:#16a34a}
+.mic-button.recording{
+  background:#dc2626;
+  box-shadow:0 0 0 12px rgba(220,38,38,.15);
+  animation:pulse 1.2s infinite;
+}
+@keyframes pulse{
+  0%{transform:scale(1)}
+  50%{transform:scale(1.08)}
+  100%{transform:scale(1)}
+}
+.footer{
+  text-align:center;
+  margin-top:20px;
+  font-size:12px;
+  color:#9ca3af;
+}
+.small{
+  text-align:center;
+  margin-top:10px;
+  color:#9ca3af;
+  font-size:11px;
+}
 </style>
-
 </head>
-
 <body>
-
 <div class="container">
-
   <div class="header">
-
-    <div class="logo">
-      🎙️
-    </div>
-
-    <h1>
-      Speedbot Voice Assistant
-    </h1>
-
-    <div class="subtitle">
-      Custom AI voice powered by Chatterbox V3
-    </div>
-
+    <div class="logo">🎙️</div>
+    <h1>Speedbot Voice Assistant</h1>
+    <div class="subtitle">Real-time STT + Llama + Chatterbox V3</div>
   </div>
 
-
-  <div
-    id="status"
-    class="status"
-  >
+  <div id="status" class="status">
     Click the microphone to start Voice Mode
   </div>
 
-
-  <div
-    id="conversation"
-    class="conversation"
-  >
-
+  <div id="conversation" class="conversation">
     <div class="message ai">
       <strong>Speedbot:</strong><br>
       Hi! I'm Speedbot. Click the microphone and let's talk.
     </div>
-
   </div>
-
 
   <div class="mic-container">
-
-    <button
-      id="micButton"
-      class="mic-button"
-      title="Start Voice Mode"
-    >
+    <button id="micButton" class="mic-button" title="Start Voice Mode">
       🎙️
     </button>
-
   </div>
-
 
   <div class="footer">
-    Click once to start continuous Voice Mode.
-    Click again to stop.
+    Click once to start continuous Voice Mode. Click again to stop.
   </div>
-
+  <div class="small">
+    Streaming speech recognition powered by Deepgram Flux on Cloudflare Workers AI.
+  </div>
 </div>
 
-
 <script>
+const micButton=document.getElementById("micButton");
+const status=document.getElementById("status");
+const conversation=document.getElementById("conversation");
 
-const micButton =
-  document.getElementById(
-    "micButton"
-  );
+let ws=null;
+let audioContext=null;
+let source=null;
+let processor=null;
+let mediaStream=null;
+let voiceModeActive=false;
+let conversationHistory=[];
+let currentAudio=null;
+let audioQueue=[];
+let playingQueue=false;
+let currentInterim=null;
+let pendingUserText="";
+let pendingAssistantText="";
 
-const status =
-  document.getElementById(
-    "status"
-  );
+function setStatus(text){
+  status.textContent=text;
+}
 
-const conversation =
-  document.getElementById(
-    "conversation"
-  );
+function addMessage(role,text){
+  const div=document.createElement("div");
+  div.className="message "+role;
+  div.innerHTML="<strong>"+(role==="user"?"You":"Speedbot")+":</strong><br>"+
+    escapeHtml(text).replace(/\\n/g,"<br>");
+  conversation.appendChild(div);
+  conversation.scrollTop=conversation.scrollHeight;
+}
 
+function escapeHtml(text){
+  const el=document.createElement("div");
+  el.textContent=text;
+  return el.innerHTML;
+}
 
-// ============================================================
-// STATE
-// ============================================================
+function showInterim(text){
+  if(!currentInterim){
+    currentInterim=document.createElement("div");
+    currentInterim.className="interim";
+    conversation.appendChild(currentInterim);
+  }
+  currentInterim.textContent=text;
+  conversation.scrollTop=conversation.scrollHeight;
+}
 
-let mediaRecorder = null;
+function clearInterim(){
+  if(currentInterim){
+    currentInterim.remove();
+    currentInterim=null;
+  }
+}
 
-let audioChunks = [];
+function downsampleBuffer(buffer,inputRate,outputRate){
+  if(outputRate===inputRate) return buffer;
 
-let isRecording = false;
+  const ratio=inputRate/outputRate;
+  const newLength=Math.round(buffer.length/ratio);
+  const result=new Float32Array(newLength);
 
-let voiceModeActive = false;
+  let offsetResult=0;
+  let offsetBuffer=0;
 
-let conversationHistory = [];
+  while(offsetResult<result.length){
+    const nextOffsetBuffer=Math.round((offsetResult+1)*ratio);
+    let accum=0;
+    let count=0;
 
-let currentAudio = null;
-
-let processing = false;
-
-
-// ============================================================
-// MICROPHONE BUTTON
-// ============================================================
-
-micButton.onclick =
-  async () => {
-
-    // --------------------------------------------------------
-    // START VOICE MODE
-    // --------------------------------------------------------
-
-    if (!voiceModeActive) {
-
-      voiceModeActive = true;
-
-      micButton.classList.add(
-        "voice-mode"
-      );
-
-      micButton.textContent =
-        "⏹️";
-
-      status.textContent =
-        "Starting Voice Mode...";
-
-      await playGreeting();
-
-      if (voiceModeActive) {
-
-        await startListening();
-
-      }
-
-      return;
-
+    for(
+      let i=offsetBuffer;
+      i<nextOffsetBuffer && i<buffer.length;
+      i++
+    ){
+      accum+=buffer[i];
+      count++;
     }
 
+    result[offsetResult]=count?accum/count:0;
+    offsetResult++;
+    offsetBuffer=nextOffsetBuffer;
+  }
 
-    // --------------------------------------------------------
-    // STOP VOICE MODE
-    // --------------------------------------------------------
+  return result;
+}
 
-    voiceModeActive = false;
+function floatTo16BitPCM(float32){
+  const output=new Int16Array(float32.length);
 
-    stopVoice();
+  for(let i=0;i<float32.length;i++){
+    const s=Math.max(-1,Math.min(1,float32[i]));
+    output[i]=s<0?s*0x8000:s*0x7fff;
+  }
 
-    if (currentAudio) {
+  return output.buffer;
+}
 
-      currentAudio.pause();
-
-      currentAudio.currentTime = 0;
-
+async function startMicrophone(){
+  mediaStream=await navigator.mediaDevices.getUserMedia({
+    audio:{
+      channelCount:1,
+      echoCancellation:true,
+      noiseSuppression:true,
+      autoGainControl:true
     }
+  });
 
-    micButton.classList.remove(
-      "voice-mode"
+  audioContext=new (window.AudioContext||window.webkitAudioContext)();
+
+  source=audioContext.createMediaStreamSource(mediaStream);
+
+  // ScriptProcessor is intentionally used here to keep this demo
+  // dependency-free. It converts browser mic audio to raw 16-bit
+  // mono PCM at 16 kHz, which Flux accepts.
+  processor=audioContext.createScriptProcessor(4096,1,1);
+
+  processor.onaudioprocess=function(event){
+    if(!ws || ws.readyState!==WebSocket.OPEN) return;
+
+    const input=event.inputBuffer.getChannelData(0);
+    const downsampled=downsampleBuffer(
+      input,
+      audioContext.sampleRate,
+      16000
     );
 
-    micButton.classList.remove(
-      "recording"
-    );
+    const pcm=floatTo16BitPCM(downsampled);
 
-    micButton.textContent =
-      "🎙️";
-
-    status.textContent =
-      "Voice Mode stopped.";
-
+    try{
+      ws.send(pcm);
+    }catch(e){}
   };
 
+  source.connect(processor);
+  processor.connect(audioContext.destination);
 
-// ============================================================
-// GREETING
-// ============================================================
-
-async function playGreeting() {
-
-  try {
-
-    status.textContent =
-      "Starting Voice Mode...";
-
-    const response =
-      await fetch(
-        "/api/tts",
-        {
-          method: "POST",
-
-          headers: {
-            "Content-Type":
-              "application/json"
-          },
-
-          body: JSON.stringify({
-            text:
-              "Hi! I'm Speedbot. How can I help you today?"
-          })
-        }
-      );
-
-    if (!response.ok) {
-
-      throw new Error(
-        "Greeting failed"
-      );
-
-    }
-
-    const buffer =
-      await response.arrayBuffer();
-
-    const blob =
-      new Blob(
-        [buffer],
-        {
-          type: "audio/wav"
-        }
-      );
-
-    const url =
-      URL.createObjectURL(
-        blob
-      );
-
-    const audio =
-      new Audio(url);
-
-    currentAudio =
-      audio;
-
-    await playAudio(
-      audio
-    );
-
-    URL.revokeObjectURL(
-      url
-    );
-
-    currentAudio = null;
-
-  } catch (error) {
-
-    console.error(
-      "GREETING ERROR:",
-      error
-    );
-
-    // If greeting fails,
-    // still allow Voice Mode
-    // to continue.
-
-  }
-
+  setStatus("Listening...");
+  micButton.classList.add("recording");
 }
 
+function stopMicrophone(){
+  try{
+    processor?.disconnect();
+    source?.disconnect();
+  }catch(e){}
 
-// ============================================================
-// START LISTENING
-// ============================================================
+  try{
+    audioContext?.close();
+  }catch(e){}
 
-async function startListening() {
+  try{
+    mediaStream?.getTracks().forEach(t=>t.stop());
+  }catch(e){}
 
-  if (
-    !voiceModeActive ||
-    isRecording ||
-    processing
-  ) {
+  processor=null;
+  source=null;
+  audioContext=null;
+  mediaStream=null;
 
-    return;
-
-  }
-
-
-  try {
-
-    const stream =
-      await navigator.mediaDevices
-        .getUserMedia({
-          audio: true
-        });
-
-
-    audioChunks = [];
-
-
-    let options = {};
-
-    if (
-      MediaRecorder.isTypeSupported(
-        "audio/webm;codecs=opus"
-      )
-    ) {
-
-      options = {
-        mimeType:
-          "audio/webm;codecs=opus"
-      };
-
-    }
-
-
-    mediaRecorder =
-      new MediaRecorder(
-        stream,
-        options
-      );
-
-
-    mediaRecorder.ondataavailable =
-      event => {
-
-        if (
-          event.data.size > 0
-        ) {
-
-          audioChunks.push(
-            event.data
-          );
-
-        }
-
-      };
-
-
-    mediaRecorder.onstop =
-      processRecording;
-
-
-    mediaRecorder.start();
-
-
-    isRecording = true;
-
-
-    micButton.classList.add(
-      "recording"
-    );
-
-    micButton.textContent =
-      "⏹️";
-
-
-    status.textContent =
-      "Listening...";
-
-
-    detectSilence(
-      stream
-    );
-
-
-  } catch (error) {
-
-    console.error(
-      "MIC ERROR:",
-      error
-    );
-
-    voiceModeActive = false;
-
-    micButton.classList.remove(
-      "voice-mode"
-    );
-
-    micButton.classList.remove(
-      "recording"
-    );
-
-    micButton.textContent =
-      "🎙️";
-
-    status.textContent =
-      "Please allow microphone access.";
-
-  }
-
+  micButton.classList.remove("recording");
 }
 
-
-// ============================================================
-// SILENCE DETECTION
-// ============================================================
-
-function detectSilence(
-  stream
-) {
-
-  const AudioContext =
-    window.AudioContext ||
-    window.webkitAudioContext;
-
-  const audioContext =
-    new AudioContext();
-
-
-  const source =
-    audioContext
-      .createMediaStreamSource(
-        stream
-      );
-
-
-  const analyser =
-    audioContext
-      .createAnalyser();
-
-
-  analyser.fftSize =
-    512;
-
-
-  source.connect(
-    analyser
-  );
-
-
-  const data =
-    new Uint8Array(
-      analyser.fftSize
+function connectWebSocket(){
+  return new Promise((resolve,reject)=>{
+    const protocol=location.protocol==="https:"?"wss:":"ws:";
+    ws=new WebSocket(
+      protocol+"//"+location.host+"/api/voice-stream"
     );
 
-
-  let silenceStart = null;
-
-  const recordingStarted =
-    Date.now();
-
-
-  function checkAudio() {
-
-    if (!isRecording) {
-
-      audioContext.close();
-
-      return;
-
-    }
-
-
-    analyser
-      .getByteTimeDomainData(
-        data
-      );
-
-
-    let sum = 0;
-
-
-    for (
-      let i = 0;
-      i < data.length;
-      i++
-    ) {
-
-      const value =
-        (
-          data[i] - 128
-        ) / 128;
-
-      sum +=
-        value * value;
-
-    }
-
-
-    const volume =
-      Math.sqrt(
-        sum / data.length
-      );
-
-
-    // --------------------------------------------------------
-    // SILENCE THRESHOLD
-    // --------------------------------------------------------
-
-    if (
-      volume < 0.02
-    ) {
-
-      if (
-        !silenceStart
-      ) {
-
-        silenceStart =
-          Date.now();
-
-      }
-
-
-      // Don't stop during
-      // the first 700ms.
-
-      const recordingDuration =
-        Date.now() -
-        recordingStarted;
-     if (
-  recordingDuration > 400 &&
-  Date.now() - silenceStart > 500
-) {
-  stopVoice();
-  audioContext.close();
-  return;
-}
-
-
-    } else {
-
-      silenceStart =
-        null;
-
-    }
-
-
-    requestAnimationFrame(
-      checkAudio
-    );
-
-  }
-
-
-  checkAudio();
-
-}
-
-
-// ============================================================
-// STOP RECORDING
-// ============================================================
-
-function stopVoice() {
-
-  if (!isRecording) {
-
-    return;
-
-  }
-
-
-  isRecording = false;
-
-
-  if (
-    mediaRecorder &&
-    mediaRecorder.state !==
-      "inactive"
-  ) {
-
-    mediaRecorder.stop();
-
-  }
-
-
-  if (
-    mediaRecorder &&
-    mediaRecorder.stream
-  ) {
-
-    mediaRecorder.stream
-      .getTracks()
-      .forEach(
-        track =>
-          track.stop()
-      );
-
-  }
-
-
-  micButton.classList.remove(
-    "recording"
-  );
-
-
-  if (
-    voiceModeActive
-  ) {
-
-    micButton.classList.add(
-      "voice-mode"
-    );
-
-    micButton.textContent =
-      "⏳";
-
-    status.textContent =
-      "Thinking...";
-
-  }
-
-}
-
-
-// ============================================================
-// PROCESS RECORDING
-// ============================================================
-
-async function processRecording() {
-
-  processing = true;
-
-
-  try {
-
-    const audioBlob =
-      new Blob(
-        audioChunks,
-        {
-          type: "audio/webm"
-        }
-      );
-
-
-    if (
-      audioBlob.size === 0
-    ) {
-
-      processing = false;
-
-      if (
-        voiceModeActive
-      ) {
-
-        await startListening();
-
-      }
-
-      return;
-
-    }
-
-
-    const formData =
-      new FormData();
-
-
-    formData.append(
-      "audio",
-      audioBlob,
-      "voice.webm"
-    );
-
-
-    // --------------------------------------------------------
-    // SEND CONVERSATION HISTORY
-    // --------------------------------------------------------
-
-    formData.append(
-      "history",
-      JSON.stringify(
-        conversationHistory
-          .slice(-10)
-      )
-    );
-
-
-    status.textContent =
-      "Thinking...";
-
-
-    // --------------------------------------------------------
-    // STT → LLM → FIRST TTS
-    // --------------------------------------------------------
-
-    const response =
-      await fetch(
-        "/api/voice",
-        {
-          method: "POST",
-          body: formData
-        }
-      );
-
-
-    if (!response.ok) {
-
-      let errorText =
-        "Voice request failed.";
-
-      try {
-
-        const errorData =
-          await response.json();
-
-        errorText =
-          errorData.error ||
-          errorText;
-
-      } catch (_) {}
-
-      throw new Error(
-        errorText
-      );
-
-    }
-
-
-    // --------------------------------------------------------
-    // USER TEXT
-    // --------------------------------------------------------
-
-    const userHeader =
-      response.headers.get(
-        "X-User-Text"
-      );
-
-
-    let userText = "";
-
-
-    if (userHeader) {
-
-      userText =
-        decodeURIComponent(
-          userHeader
-        );
-
-
-      addMessage(
-        "You",
-        userText
-      );
-
-
-      conversationHistory.push({
-        role: "user",
-        content: userText
-      });
-
-    }
-
-
-    // --------------------------------------------------------
-    // AI TEXT
-    // --------------------------------------------------------
-
-    const aiHeader =
-      response.headers.get(
-        "X-AI-Response"
-      );
-
-
-    let aiText = "";
-
-
-    if (aiHeader) {
-
-      aiText =
-        decodeURIComponent(
-          aiHeader
-        );
-
-
-      addMessage(
-        "Speedbot",
-        aiText
-      );
-
-
-      conversationHistory.push({
-        role: "assistant",
-        content: aiText
-      });
-
-    }
-
-
-    // Keep memory manageable.
-
-    conversationHistory =
-      conversationHistory
-        .slice(-6);
-
-
-    // --------------------------------------------------------
-    // TTS CHUNKS
-    // --------------------------------------------------------
-
-    const chunksHeader =
-      response.headers.get(
-        "X-TTS-Chunks"
-      );
-
-
-    let chunks = [];
-
-
-    if (chunksHeader) {
-
-      try {
-
-        chunks =
-          JSON.parse(
-            decodeURIComponent(
-              chunksHeader
-            )
-          );
-
-      } catch (error) {
-
-        console.error(
-          "Could not parse TTS chunks:",
-          error
-        );
-
-      }
-
-    }
-
-
-    if (
-      !chunks.length &&
-      aiText
-    ) {
-
-      chunks =
-        splitText(
-          aiText
-        );
-
-    }
-
-
-    if (
-      !chunks.length
-    ) {
-
-      chunks = [
-        aiText
-      ];
-
-    }
-
-
-    // --------------------------------------------------------
-    // FIRST AUDIO
-    // --------------------------------------------------------
-
-    status.textContent =
-      "Speaking...";
-
-
-    const firstBuffer =
-      await response
-        .arrayBuffer();
-
-
-    const firstBlob =
-      new Blob(
-        [firstBuffer],
-        {
-          type: "audio/wav"
-        }
-      );
-
-
-    const firstUrl =
-      URL.createObjectURL(
-        firstBlob
-      );
-
-
-    const firstAudio =
-      new Audio(
-        firstUrl
-      );
-
-
-    currentAudio =
-      firstAudio;
-
-
-    // --------------------------------------------------------
-    // PREFETCH SECOND SENTENCE
-    // --------------------------------------------------------
-
-    let nextAudioPromise =
-      null;
-
-
-    if (
-      chunks.length > 1
-    ) {
-
-      nextAudioPromise =
-        fetchTTS(
-          chunks[1]
-        );
-
-    }
-
-
-    // --------------------------------------------------------
-    // PLAY FIRST SENTENCE
-    // --------------------------------------------------------
-
-    await playAudio(
-      firstAudio
-    );
-
-
-    // --------------------------------------------------------
-    // PLAY REMAINING SENTENCES
-    // --------------------------------------------------------
-
-    for (
-      let i = 1;
-      i < chunks.length;
-      i++
-    ) {
-
-      if (
-        !voiceModeActive
-      ) {
-
-        break;
-
-      }
-
-
-      status.textContent =
-        "Speaking...";
-
-
-      let audio;
-
-
-      if (
-        i === 1 &&
-        nextAudioPromise
-      ) {
-
-        audio =
-          await nextAudioPromise;
-
-      } else {
-
-        audio =
-          await fetchTTS(
-            chunks[i]
-          );
-
-      }
-
-
-      currentAudio =
-        audio;
-
-
-      // Prefetch next sentence.
-
-      if (
-        i + 1 <
-        chunks.length
-      ) {
-
-        nextAudioPromise =
-          fetchTTS(
-            chunks[i + 1]
-          );
-
-      } else {
-
-        nextAudioPromise =
-          null;
-
-      }
-
-
-      await playAudio(
-        audio
-      );
-
-    }
-
-
-    URL.revokeObjectURL(
-      firstUrl
-    );
-
-
-    currentAudio = null;
-
-
-    // --------------------------------------------------------
-    // AUTOMATICALLY LISTEN AGAIN
-    // --------------------------------------------------------
-
-    if (
-      voiceModeActive
-    ) {
-
-      status.textContent =
-        "Listening...";
-
-
-      // Start listening again immediately.
-      if (voiceModeActive) {
-        startListening();
-      }
-
-    }
-
-  } catch (error) {
-
-    console.error(
-      "VOICE ERROR:",
-      error
-    );
-
-    const errorMessage =
-      error instanceof Error
-        ? error.message
-        : String(error);
-
-    console.error(
-      "ACTUAL ERROR:",
-      errorMessage
-    );
-
-    if (voiceModeActive) {
-
-      status.textContent =
-        "Error: " + errorMessage;
-
-      setTimeout(
-        () => {
-
-          if (
-            voiceModeActive &&
-            !isRecording &&
-            !processing
-          ) {
-
-            startListening();
-
-          }
-
-        },
-        1500
-      );
-
-    } else {
-
-      status.textContent =
-        "Error: " + errorMessage;
-
-    }
-
-  }
-
-  processing = false;
-}
-  // ============================================================
-  // FETCH TTS
-// ============================================================
-// FETCH TTS
-// ============================================================
-
-async function fetchTTS(
-  text
-) {
-
-  const response =
-    await fetch(
-      "/api/tts",
-      {
-        method: "POST",
-
-        headers: {
-          "Content-Type":
-            "application/json"
-        },
-
-        body: JSON.stringify({
-          text: text
-        })
-      }
-    );
-
-
-  if (!response.ok) {
-
-    throw new Error(
-      "TTS request failed"
-    );
-
-  }
-
-
-  const buffer =
-    await response
-      .arrayBuffer();
-
-
-  const blob =
-    new Blob(
-      [buffer],
-      {
-        type: "audio/wav"
-      }
-    );
-
-
-  const url =
-    URL.createObjectURL(
-      blob
-    );
-
-
-  const audio =
-    new Audio(url);
-
-
-  audio.onended =
-    () => {
-
-      URL.revokeObjectURL(
-        url
-      );
-
+    ws.binaryType="arraybuffer";
+
+    ws.onopen=()=>{
+      ws.send(JSON.stringify({
+        type:"config",
+        history:conversationHistory
+      }));
+      resolve();
     };
 
+    ws.onmessage=async(event)=>{
+      if(typeof event.data==="string"){
+        let message;
 
-  return audio;
-
-}
-
-
-// ============================================================
-// PLAY AUDIO
-// ============================================================
-
-function playAudio(
-  audio
-) {
-
-  return new Promise(
-    (
-      resolve,
-      reject
-    ) => {
-
-      audio.onended =
-        () => {
-
-          resolve();
-
-        };
-
-
-      audio.onerror =
-        () => {
-
-          reject(
-            new Error(
-              "Audio playback failed"
-            )
-          );
-
-        };
-
-
-      audio.play()
-        .catch(
-          reject
-        );
-
-    }
-  );
-
-}
-
-
-// ============================================================
-// TEXT SPLITTER
-// ============================================================
-
-function splitText(
-  text
-) {
-
-  if (!text) {
-
-    return [];
-
-  }
-
-
-  return (
-    text
-      .match(
-        /[^.!?]+[.!?]+|[^.!?]+$/g
-      )
-      ?.map(
-        s =>
-          s.trim()
-      )
-      .filter(Boolean)
-    ||
-    [text]
-  );
-
-}
-
-
-// ============================================================
-// ADD MESSAGE
-// ============================================================
-
-function addMessage(
-  sender,
-  text
-) {
-
-  const message =
-    document.createElement(
-      "div"
-    );
-
-
-  message.className =
-    "message " +
-    (
-      sender === "You"
-        ? "user"
-        : "ai"
-    );
-
-
-  message.innerHTML =
-    "<strong>" +
-    escapeHtml(sender) +
-    ":</strong><br>" +
-    escapeHtml(text);
-
-
-  conversation.appendChild(
-    message
-  );
-
-
-  conversation.scrollTop =
-    conversation.scrollHeight;
-
-}
-
-
-// ============================================================
-// ESCAPE HTML
-// ============================================================
-
-function escapeHtml(
-  text
-) {
-
-  const div =
-    document.createElement(
-      "div"
-    );
-
-
-  div.textContent =
-    text;
-
-
-  return div.innerHTML;
-
-}
-
-</script>
-
-</body>
-
-</html>`,
-
-        {
-          headers: {
-            "Content-Type":
-              "text/html; charset=UTF-8"
-          }
+        try{
+          message=JSON.parse(event.data);
+        }catch(e){
+          return;
         }
 
-      );
+        if(message.type==="ready"){
+          setStatus("Listening...");
+          return;
+        }
 
-    }
+        if(message.type==="interim"){
+          showInterim(message.text||"");
+          return;
+        }
 
+        if(message.type==="eager_final"){
+          showInterim(message.text||"");
+          return;
+        }
 
-    // ============================================================
-    // NOT FOUND
-    // ============================================================
+        if(message.type==="user_final"){
+          clearInterim();
+          pendingUserText=message.text||"";
+          if(pendingUserText){
+            addMessage("user",pendingUserText);
+          }
+          return;
+        }
 
-    return new Response(
-      "Not Found",
-      {
-        status: 404
+        if(message.type==="assistant_text"){
+          pendingAssistantText=message.text||"";
+          if(pendingAssistantText){
+            addMessage("ai",pendingAssistantText);
+          }
+
+          conversationHistory=Array.isArray(message.history)
+            ? message.history
+            : conversationHistory;
+
+          return;
+        }
+
+        if(message.type==="status"){
+          if(message.value==="thinking"){
+            setStatus("Thinking...");
+          }else if(message.value==="speaking"){
+            setStatus("Speaking...");
+          }else if(message.value==="listening"){
+            setStatus("Listening...");
+          }
+          return;
+        }
+
+        if(message.type==="audio_chunk"){
+          return;
+        }
+
+        if(message.type==="audio_end"){
+          return;
+        }
+
+        if(message.type==="error"){
+          setStatus("Error: "+(message.message||"Unknown error"));
+          return;
+        }
+
+        return;
       }
-    );
 
+      if(event.data instanceof ArrayBuffer){
+        queueAudio(event.data);
+      }else if(event.data instanceof Blob){
+        queueAudio(await event.data.arrayBuffer());
+      }
+    };
+
+    ws.onerror=()=>{
+      reject(new Error("Voice WebSocket connection failed"));
+    };
+
+    ws.onclose=()=>{
+      if(voiceModeActive){
+        setStatus("Connection closed. Click the microphone to restart.");
+        stopMicrophone();
+        micButton.classList.remove("voice-mode");
+        micButton.textContent="🎙️";
+        voiceModeActive=false;
+      }
+    };
+  });
+}
+
+function queueAudio(arrayBuffer){
+  audioQueue.push(arrayBuffer);
+  playNextAudio();
+}
+
+async function playNextAudio(){
+  if(playingQueue || audioQueue.length===0) return;
+
+  playingQueue=true;
+  const buffer=audioQueue.shift();
+
+  try{
+    const blob=new Blob([buffer],{type:"audio/wav"});
+    const url=URL.createObjectURL(blob);
+
+    currentAudio=new Audio(url);
+    currentAudio.preload="auto";
+
+    await currentAudio.play();
+
+    await new Promise(resolve=>{
+      currentAudio.onended=resolve;
+      currentAudio.onerror=resolve;
+    });
+
+    URL.revokeObjectURL(url);
+    currentAudio=null;
+  }catch(e){
+    console.error("Audio playback error",e);
   }
 
+  playingQueue=false;
+
+  if(audioQueue.length){
+    playNextAudio();
+  }else if(voiceModeActive){
+    setStatus("Listening...");
+  }
+}
+
+function closeEverything(){
+  voiceModeActive=false;
+  stopMicrophone();
+
+  if(currentAudio){
+    try{
+      currentAudio.pause();
+      currentAudio.currentTime=0;
+    }catch(e){}
+  }
+
+  audioQueue=[];
+
+  if(ws){
+    try{
+      ws.send(JSON.stringify({type:"close"}));
+    }catch(e){}
+
+    try{
+      ws.close();
+    }catch(e){}
+  }
+
+  ws=null;
+  clearInterim();
+
+  micButton.classList.remove("voice-mode");
+  micButton.classList.remove("recording");
+  micButton.textContent="🎙️";
+  setStatus("Voice Mode stopped.");
+}
+
+micButton.onclick=async()=>{
+  if(voiceModeActive){
+    closeEverything();
+    return;
+  }
+
+  try{
+    voiceModeActive=true;
+    micButton.classList.add("voice-mode");
+    micButton.textContent="⏹️";
+    setStatus("Connecting...");
+
+    await connectWebSocket();
+
+    if(!voiceModeActive) return;
+
+    await startMicrophone();
+  }catch(error){
+    console.error(error);
+    setStatus(
+      "Could not start voice mode: "+
+      (error.message||"unknown error")
+    );
+    closeEverything();
+  }
+};
+
+window.addEventListener("beforeunload",()=>{
+  try{
+    ws?.close();
+  }catch(e){}
+});
+</script>
+</body>
+</html>`;
+}
+
+export default {
+  async fetch(request: Request, env: any): Promise<Response> {
+    const url = new URL(request.url);
+
+    if (request.method === "OPTIONS") {
+      return json({});
+    }
+
+    if (url.pathname === "/api/health") {
+      return json({
+        status: "ok",
+        service: "Speedbot Custom Voice Agent",
+        stt: "Deepgram Flux streaming",
+        llm: MODEL_ID,
+        tts: "Chatterbox V3",
+      });
+    }
+
+    if (url.pathname === "/api/config-check") {
+      return json({
+        chatterbox_configured: Boolean(env.CHATTERBOX_URL),
+        chatterbox_url_valid: Boolean(
+          env.CHATTERBOX_URL &&
+          /^https?:\/\//.test(env.CHATTERBOX_URL)
+        ),
+        streaming_stt: FLUX_MODEL,
+      });
+    }
+
+    if (
+      url.pathname === "/api/voice-stream" &&
+      request.headers.get("Upgrade")?.toLowerCase() === "websocket"
+    ) {
+      return voiceWebSocket(request, env);
+    }
+
+    if (url.pathname === "/") {
+      return new Response(html(), {
+        status: 200,
+        headers: {
+          "Content-Type": "text/html; charset=UTF-8",
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
+    return new Response("Not Found", { status: 404 });
+  },
 };
